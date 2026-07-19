@@ -1,0 +1,14 @@
+name: airline_lab
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - scipy
+  - jupyter
+  - ipykernel
+  - pip
+  - pip:
+    - yfinance
