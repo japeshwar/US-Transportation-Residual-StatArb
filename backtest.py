@@ -64,7 +64,7 @@ def generate_signals(
         new = prev.copy()   # safe now — prev always initialized
 
         # ── Step 1: Exit positions that have reverted ──────────────────────
-        new[np.abs(z) < exit] = 0.0
+        new[np.abs(z) < exit_] = 0.0
 
         # ── Step 2: Prune positions no longer in top_n ────────────────────
         current_longs  = new[new ==  1.0].index.tolist()
