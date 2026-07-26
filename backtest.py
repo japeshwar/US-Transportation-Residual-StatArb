@@ -2,8 +2,7 @@
 """
 Dynamic Airline Factor Laboratory
 _______
-Trading engine separated into two conceptual stages following the mentor's
-advice:
+Trading engine separated into two conceptual stages:
 
     STAGE 1 — PORTFOLIO CONSTRUCTION
         Converts z-scores into directional signals and dollar-neutral weights.
@@ -30,72 +29,156 @@ Transaction costs: 15 basis points one-way on turnover.
 import numpy as np
 import pandas as pd
 import sys, os
+from statsmodels.tsa.stattools import adfuller
 import scipy.stats as stats
 from typing import Tuple
 # Strategic Parameters
 entry_threshold = 2 # Z score to enter a position
-exit_threshold = 0.75 # Z score must fall beneath this to exit a position
+exit_threshold = 0.5 # Z score must fall beneath this to exit a position
+concentration_close = 0.80 # PC1 > this --> close all positions (crisis mode regime hedge)
+concentration_reopen = 0.65 # PC1 > this --> allow new positions again
 transaction_cost = 0.0015 # 15 basis points
 trading_days = 252
+top_n = 2 # max positions per side (long or short)
 # Portfolio Construction
 def generate_signals(
     zscores: pd.DataFrame,
-    entry: float = entry_threshold,
-    exit: float = exit_threshold,
+    entry:   float = entry_threshold,
+    exit_:   float = exit_threshold,
+    top_n:   int   = top_n,
 ) -> pd.DataFrame:
-
     """
-    Purpose
-    _______
-    Converting the rolling z-scores into raw directional signals using a band. Signal formed @ the end of day t, executed on t+1
-
-    Inputs
-    _______
-    zscores: pd.DataFrame (T x N) - rolling z-scores of mispriced residuals
-    entry: float - z-score magnitude to enter
-    enxt: float - z-score magnitude to exit
-
-    Outputs
-    _______
-    pd.DataFrame (T x N) - raw signals: +1 long, -1 short, 0 flat
-
-    Mathematical Explanation
-    _______
-    The signal rule implements a band to avoid excessive trading:
-     s_{i,t} = +1   if z_{i,t} < -entry (enter long)
-        s_{i,t} = -1   if z_{i,t} > +entry (enter short)
-        s_{i,t} = 0    if |z_{i,t}| < exit (exit position)
-        s_{i,t} = s_{i,t-1} otherwise (hold)
-
-    The outer band (|z| > 2) triggers entry; the inner band (|z| < 0.5) triggers exit. Between the two bands, the prior position is continued.
-
-    Assumptions
-    _______
-    - Signal generates daily and rebalanced once thresholds are crossed
-    - The carry-forward logic here handles intra-month position persistence
-    - This loop cannot be trivially vectorized: yesterday's influences today's, by intention.
+    Convert z-scores to signals: +1 long, -1 short, 0 flat.
+    Only trades top_n most mispriced stocks per side.
     """
-    signals = pd.DataFrame(0, index=zscores.index, columns=zscores.columns,dtype=float)
+    signals = pd.DataFrame(
+        0.0, index=zscores.index, columns=zscores.columns
+    )
+
+    # Initialize prev BEFORE the loop — this was the bug
+    # On iteration 0, new = prev.copy() needs prev to already exist
+    prev = pd.Series(0.0, index=zscores.columns)
 
     for i, date in enumerate(zscores.index):
-        z = zscores.iloc[i]
+        z   = zscores.loc[date]
+        new = prev.copy()   # safe now — prev always initialized
 
-        if i == 0:
-            signals.iloc[0] = np.where(z < -entry, 1.0,
-                                       np.where(z > entry, -1.0, 0.0))
-            continue
-        prev = signals.iloc[i - 1].copy()
-        new = prev.copy()
-
-        # Exiting when the mispricing reverts
+        # ── Step 1: Exit positions that have reverted ──────────────────────
         new[np.abs(z) < exit] = 0.0
 
-        # Entry: new anomaly found
-        new[z < -entry] = 1.0
-        new[z > entry] = -1.0
+        # ── Step 2: Prune positions no longer in top_n ────────────────────
+        current_longs  = new[new ==  1.0].index.tolist()
+        current_shorts = new[new == -1.0].index.tolist()
 
-        signals.iloc[i] = new
+        if len(current_longs) > top_n:
+            keep = z[current_longs].nsmallest(top_n).index
+            for ticker in current_longs:
+                if ticker not in keep:
+                    new[ticker] = 0.0
+
+        if len(current_shorts) > top_n:
+            keep = z[current_shorts].nlargest(top_n).index
+            for ticker in current_shorts:
+                if ticker not in keep:
+                    new[ticker] = 0.0
+
+        # ── Step 3: Enter new top_n signals ───────────────────────────────
+        long_universe  = z[(z < -entry) & (new != 1.0)]
+        short_universe = z[(z >  entry) & (new != -1.0)]
+
+        if len(long_universe) > 0:
+            slots = top_n - (new == 1.0).sum()
+            if slots > 0:
+                for ticker in long_universe.nsmallest(top_n).index[:slots]:
+                    new[ticker] = 1.0
+
+        if len(short_universe) > 0:
+            slots = top_n - (new == -1.0).sum()
+            if slots > 0:
+                for ticker in short_universe.nlargest(top_n).index[:slots]:
+                    new[ticker] = -1.0
+
+        signals.loc[date] = new
+        prev = new.copy()
+
     return signals
+
+def apply_concentration_filter(
+    signals:       pd.DataFrame,
+    concentration: pd.Series,
+    close_above:   float = concentration_close,
+    reopen_below:  float = concentration_reopen,
+) -> pd.DataFrame:
+    """
+    Purpose
+    -------
+    Zero out all positions when PC1 concentration exceeds the crisis threshold.
+    Prevents trading during stress regimes when all airlines move in lockstep
+    and there is no idiosyncratic spread to capture.
+ 
+    Inputs
+    ------
+    signals       : pd.DataFrame (T × N)  — raw signals from generate_signals()
+    concentration : pd.Series (T,)         — PC1 explained variance ratio per day
+                                             output of compute_pc1_concentration()
+                                             in models.py
+    close_above   : float                  — concentration above this → close all
+    reopen_below  : float                  — concentration below this → re-enable
+ 
+    Outputs
+    -------
+    pd.DataFrame (T × N)  — filtered signals
+ 
+    Mathematical Explanation
+    ------------------------
+    PC1 concentration = λ₁ / Σᵢ λᵢ
+ 
+    When concentration > 0.80:
+        The first principal component (≈ market/sector factor) explains
+        more than 80% of total variance. All airlines are nearly perfectly
+        correlated. Residuals from the factor model are essentially zero
+        or noise. No genuine relative mispricing exists to trade.
+ 
+    Hysteresis band (close_above=0.80, reopen_below=0.65):
+        Without hysteresis, concentration oscillating near 0.80 would
+        cause the strategy to toggle on/off every day, generating turnover.
+        We close when concentration > 0.80 and only reopen when it drops
+        back below 0.65.
+ 
+    Empirically:
+        Normal market:  concentration ≈ 0.30–0.50
+        Elevated:       concentration ≈ 0.50–0.70
+        Stress:         concentration ≈ 0.70–0.85
+        Crisis (COVID): concentration ≈ 0.85–0.95
+ 
+    Assumptions
+    -----------
+    - Concentration is computed from the SAME rolling covariance that
+      generates the residuals — consistent timing, no look-ahead.
+    - Dates without concentration data (early rows) are treated as safe
+      (no filter applied). Conservative choice: prefer being in the market
+      when we lack information rather than sitting out.
+    """
+    filtered   = signals.copy()
+    blocked    = False   # tracks whether we are currently in a blocked regime
+    common = signals.index.intersection(concentration.index)
+    for date in common:
+        c = concentration.loc[date]
+ 
+        # Engage crisis filter
+        if c > close_above:
+            blocked = True
+ 
+        # Release crisis filter only when concentration fully recovers
+        if blocked and c < reopen_below:
+            blocked = False
+ 
+        # Zero all positions while blocked
+        if blocked:
+            filtered.loc[date] = 0.0
+ 
+    return filtered
+
 def construct_portfolio(signals: pd.DataFrame) -> pd.DataFrame:
     """
     Purpose
@@ -232,6 +315,159 @@ def compute_portfolio_returns(
 
     return net_ret, trades_df
 
+def compute_mean_reversion_stats(
+    residuals: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Purpose
+    _______
+    For each airline's residual series, estimate the speed and
+    statistical significance of mean reversion. This is the core
+    diagnostic for whether the z-score signal has predictive power.
+ 
+    Inputs
+    _______
+    residuals : pd.DataFrame (T × N)  — PCA residuals (from models.py)
+                Run this on the TRAINING period only.
+ 
+    Outputs
+    _______
+    pd.DataFrame  — one row per airline:
+        half_life    : days for residual to decay by half (AR1 estimate)
+        ar1_coef     : AR(1) coefficient φ ∈ (0,1)
+        adf_pvalue   : Augmented Dickey-Fuller test p-value
+        adf_stat     : ADF test statistic
+        tradeable    : bool — half_life<20 AND adf_pvalue<0.05
+ 
+    Mathematical Explanation
+    _______
+    AR(1) Model:
+        ε_t = a + φ · ε_{t-1} + η_t
+ 
+    φ = AR(1) coefficient, estimated by OLS
+        φ ∈ (0,1)  → mean reverting (ε_t pulls toward mean)
+        φ = 1      → random walk (no mean reversion, DO NOT TRADE)
+        φ > 1      → explosive (impossible after proper factor removal)
+ 
+    Half-life from AR(1):
+        The half-life is the number of days required for a deviation
+        from the mean to reduce by half:
+ 
+        half_life = ln(2) / -ln(φ)
+ 
+        φ = 0.97  → half_life = 22.7 days  (slow, marginal)
+        φ = 0.93  → half_life =  9.5 days  (good, tradeable)
+        φ = 0.87  → half_life =  4.9 days  (fast, strong signal)
+ 
+    Relationship to z-score window:
+        The z-score rolling window should be LARGER than the half-life,
+        otherwise the denominator (rolling std) captures the reversion
+        itself, shrinking the z-score prematurely.
+        Rule of thumb: z_window ≈ 3-5 × half_life
+ 
+        If half_life ≈ 5 days → z_window = 15-25 days (NOT 30)
+        If half_life ≈ 10 days → z_window = 30-50 days
+ 
+    ADF Test:
+        Formal hypothesis test for stationarity.
+        H₀: series has a unit root (random walk, no mean reversion)
+        H₁: series is stationary (mean reverting)
+ 
+        p < 0.05  → reject H₀ → stationary → TRADEABLE
+        p > 0.10  → fail to reject H₀ → possible random walk → CAUTION
+ 
+    Diagnostic Decision Table:
+        half_life < 10 AND p < 0.05 → STRONG signal, trade with confidence
+        half_life < 20 AND p < 0.05 → MODERATE signal, trade normally
+        half_life < 20 AND p > 0.05 → WEAK signal, reduce position size
+        half_life > 20 OR  p > 0.10 → NO EDGE, do not trade this name
+ 
+    Assumptions
+    _______
+    - ADF test uses maxlag=5 (captures autocorrelation up to 1 week)
+    - Constant included in ADF regression (allows non-zero mean residual)
+    - Minimum 50 observations required for reliable ADF test
+    """
+    results = []
+ 
+    for ticker in residuals.columns:
+        series = residuals[ticker].dropna()
+        if len(series) < 50:
+            results.append({
+                "ticker":    ticker,
+                "half_life": np.nan,
+                "ar1_coef":  np.nan,
+                "adf_pvalue": np.nan,
+                "adf_stat":  np.nan,
+                "tradeable": False,
+            })
+            continue
+ 
+        # ── AR(1) half-life ────────────────────────────────────────────────
+        y = series.iloc[1:].values
+        x = series.iloc[:-1].values
+        # OLS: y = a + φ·x + noise → φ = Cov(x,y)/Var(x)
+        phi = np.cov(x, y)[0, 1] / np.var(x) if np.var(x) > 0 else np.nan
+ 
+        if phi is not None and 0 < phi < 1:
+            half_life = np.log(2) / (-np.log(phi))
+        else:
+            half_life = np.nan
+ 
+        # ── ADF test ───────────────────────────────────────────────────────
+        try:
+            adf_result = adfuller(series, maxlag=5, regression='c',
+                                   autolag='AIC')
+            adf_stat   = adf_result[0]
+            adf_pvalue = adf_result[1]
+        except Exception:
+            adf_stat   = np.nan
+            adf_pvalue = np.nan
+ 
+        # ── Tradeable determination ────────────────────────────────────────
+        tradeable = (
+            half_life is not None
+            and not np.isnan(half_life)
+            and half_life < 20
+            and adf_pvalue is not None
+            and not np.isnan(adf_pvalue)
+            and adf_pvalue < 0.05
+        )
+ 
+        results.append({
+            "ticker":     ticker,
+            "half_life":  round(half_life, 2) if not np.isnan(half_life) else np.nan,
+            "ar1_coef":   round(phi,       4) if phi and not np.isnan(phi) else np.nan,
+            "adf_pvalue": round(adf_pvalue, 4) if not np.isnan(adf_pvalue) else np.nan,
+            "adf_stat":   round(adf_stat,  4) if not np.isnan(adf_stat) else np.nan,
+            "tradeable":  tradeable,
+        })
+ 
+    df = pd.DataFrame(results).set_index("ticker")
+ 
+    print("\n=== Mean Reversion Diagnostics ===")
+    print(f"{'Ticker':<8} {'Half-Life':>10} {'AR1(φ)':>8} "
+          f"{'ADF p':>8} {'Tradeable':>10}")
+    print("─" * 50)
+    for t, row in df.iterrows():
+        hl  = f"{row['half_life']:.1f}d" if not pd.isna(row['half_life']) else "N/A"
+        phi = f"{row['ar1_coef']:.3f}"   if not pd.isna(row['ar1_coef'])  else "N/A"
+        p   = f"{row['adf_pvalue']:.4f}" if not pd.isna(row['adf_pvalue']) else "N/A"
+        tr  = "✓ YES" if row['tradeable'] else "✗ NO"
+        print(f"{t:<8} {hl:>10} {phi:>8} {p:>8} {tr:>10}")
+ 
+    print(f"\nZ-score window recommendation:")
+    valid_hl = df['half_life'].dropna()
+    if len(valid_hl) > 0:
+        median_hl = valid_hl.median()
+        rec_min   = int(median_hl * 3)
+        rec_max   = int(median_hl * 5)
+        print(f"  Median half-life: {median_hl:.1f} days")
+        print(f"  Recommended z-score window: {rec_min}–{rec_max} days")
+        print(f"  (Current: 30 days — adjust models.ZSCORE_WINDOW accordingly)")
+ 
+    return df
+
 def benchmark_regression(
     net_returns: pd.Series,
     macro_returns: pd.DataFrame,
@@ -324,7 +560,7 @@ def benchmark_regression(
         t_stat = alpha_daily / se_alpha if se_alpha > 0 else np.nan
         ss_tot = ((y - y.mean()) ** 2).sum()
         ss_res = (resid ** 2).sum()
-        r2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+        r2 = 1 - (resid**2).sum() / ss_tot if ss_tot > 0 else np.nan
         corr = np.corrcoef(y, x)[0, 1]
 
         b = bench.lower()
@@ -333,8 +569,8 @@ def benchmark_regression(
         result[f"{b}_beta"] = round(beta_coef, 4)
         result[f"{b}_r2"] = round(r2, 4)
         result[f"{b}_correlation"] = round(corr, 4)
-
     return pd.Series(result)
+
 def compute_performance(
     net_returns: pd.Series,
     trades_df: pd.DataFrame,
@@ -439,6 +675,7 @@ def compute_performance(
     bench = benchmark_regression(net_returns, macro_returns)
 
     return pd.concat([core, bench])
+
 def macro_regime_diagnostics(
     net_returns: pd.Series,
     macro_returns: pd.DataFrame,
@@ -488,6 +725,8 @@ def macro_regime_diagnostics(
 
     for macro_var in ["VIX","Brent"]:
         if macro_var not in macro.columns:
+            print(f"  Warning: {macro_var} not in macro_returns columns")
+            print(f"  Available: {macro_returns.columns.tolist()}")
             continue
         var_series = macro[macro_var].dropna()
         quartiles = pd.qcut(var_series, q = 4, labels = ["Q1","Q2","Q3","Q4"])

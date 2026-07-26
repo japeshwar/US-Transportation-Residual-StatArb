@@ -60,9 +60,8 @@ that airline i is temporarily mispriced relative to its peers.
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Tuple
-from sklearn.covariance import LedoitWolf
 
-lookback = 60 # Default rolling covariance window (trading days)
+lookback = 90 # Default rolling covariance window (trading days)
 zscore_window = 20 # Rolling z-score window (trading days)
 n_components = 3 # Default # of PCs
  
@@ -121,12 +120,9 @@ def rolling_covariances(
     for i in range(window, len(dates)):
         # window is [i-window, i-1]: excludes current day i
         window_returns = returns.iloc[i-window:i]
-        lw = LedoitWolf()
-        cov = lw.fit(window_returns.values).covariance_
-        cov *= 252
+        cov = window_returns.cov().values * 252
         cov = (cov + cov.T) / 2
         cov_matrices[dates[i]] = cov
-
     return cov_matrices
 # Principal Component Analysis via Eigendecomposition
 def run_pca(
@@ -381,10 +377,8 @@ def compute_factor_returns(
 
         r_t = returns.loc[date].values
         cov = cov_matrices[date]
-        _, eigenvectors, _ = run_pca(cov, n_components)
-
-        f_t = eigenvectors.T @ r_t
-        rows.append(f_t)
+        _, evecs, _ = run_pca(cov, n_components)
+        rows.append(evecs.T @ r_t)
         dates.append(date)
 
     return pd.DataFrame(rows, index = dates, columns = pc_cols)
@@ -438,12 +432,13 @@ def compute_rolling_zscore(
     """
     roll_mean = residuals.rolling(window=window, min_periods = 10).mean()
     roll_std = residuals.rolling(window=window, min_periods = 10).std()
-
+    roll_std = roll_std.replace(0.0, np.nan)
     return (residuals - roll_mean) / roll_std
 # PC1 Concentration
 
 def compute_pc1_concentration(
-    cov_matrices: Dict[pd.Timestamp, np.ndarray]
+    cov_matrices: Dict[pd.Timestamp, np.ndarray],
+    n_total: int = None,
 ) -> pd.Series:
     """
     Purpose
@@ -488,17 +483,17 @@ def compute_pc1_concentration(
     records = {}
 
     for date, cov in cov_matrices.items():
-        eigenvalues = np.linalg.eigvalsh(cov)
-        eigenvalues = np.maximum(eigenvalues, 0.0)
-        total = eigenvalues.sum()
-        concentration = eigenvalues[-1] / total if total > 0 else np.nan
+        evals = np.linalg.eigvalsh(cov)
+        evals = np.maximum(evals, 0.0)
+        total = evals.sum()
+        concentration = evals[-1] / total if total > 0 else np.nan
         records[date] = concentration
     return pd.Series(records, name = "pc1_concentration")
 def run_window_sensitivity(
     returns: pd.DataFrame,
     windows: List[int] = window_candidates,
     n_components: int = n_components,
-) -> pd.DataFrame:
+) -> dict:
     """
     Purpose
     _______
@@ -539,8 +534,8 @@ def run_window_sensitivity(
         print(f" Window {w:3d}d...", end = "  ")
         cov = rolling_covariances(returns, window = w)
         _, residuals, _, _, _ = compute_factor_model(returns, cov, n_components)
-        zscores = compute_rolling_zscore(residuals)
-        zscores = zscores.dropna()
+        zscores = compute_rolling_zscore(residuals).dropna()
         results[w] = (residuals, zscores)
+        print("done")
 
     return results
