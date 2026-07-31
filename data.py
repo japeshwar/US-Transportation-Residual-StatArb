@@ -1,3 +1,9 @@
+"""
+data.py
+==============
+Dynamic Airline Factor Laboratory
+"""
+
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -6,7 +12,7 @@ import pandas as pd
 import yfinance as yf
 import matplotlib.pyplot as plt
 
-airlines = ['DAL','UAL','AAL','LUV','ALK','JBLU']
+airlines = ['DAL','UAL','AAL','LUV','ALK','JBLU','CPA']
 benchmark = ['SPY','JETS']
 macro = ['BZ=F','^VIX']
 start_date = '2015-01-01'
@@ -134,9 +140,9 @@ def load_data() -> tuple:
 
     Outputs
     _______
-    airline_returns : pd.DataFrame (T × 6)   — daily log returns, airlines
-    macro_returns   : pd.DataFrame (T × 4)   — SPX, SPY, BRENT, VIX
-    prices          : pd.DataFrame (T × N)   — raw adjusted closing prices
+    airline_returns: pd.DataFrame (T × 6)   — daily log returns, airlines
+    macro_returns: pd.DataFrame (T × 4)   — SPX, SPY, BRENT, VIX
+    prices: pd.DataFrame (T × N)   — raw adjusted closing prices
 
     Assumptions
     _______
@@ -160,12 +166,12 @@ def load_data() -> tuple:
     airline_returns = airline_returns.loc[common_idx]
     macro_returns = macro_returns.loc[common_idx]
 
-    print(f"Airlines : {airline_returns.shape[1]} tickers")
-    print(f"Macro : {macro_returns.shape[1]} tickers")
-    print(f"Dates : {len(airline_returns)} trading days")
+    print(f"Airlines: {airline_returns.shape[1]} tickers")
+    print(f"Macro: {macro_returns.shape[1]} tickers")
+    print(f"Dates: {len(airline_returns)} trading days")
     print(f"Range: {airline_returns.index[0].date()} "
         f"-> {airline_returns.index[-1].date()}")
-    print(f"Training : {airline_returns.index[0].date()} -> {train_end}")
+    print(f"Training: {airline_returns.index[0].date()} -> {train_end}")
     print(f"Validation: {test_start} -> {airline_returns.index[-1].date()}")
 
     return airline_returns, macro_returns, prices

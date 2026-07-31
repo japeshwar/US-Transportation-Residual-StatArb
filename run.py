@@ -1,39 +1,27 @@
 """
+run.py
+===========
 Dynamic Airline Factor Laboratory
-_______
-Orchestrates the full research pipeline from raw data to output CSVs.
 
-Pipeline
-_______
-    [1]  Download and clean market data
-    [2]  Split into training (2015–2019) and validation (2020–2024) periods
-    [3]  Window sensitivity analysis on training period (60, 90, 120, 180 days)
-    [4]  Select optimal window; hold fixed for validation
-    [5]  Run full factor model on selected window
-    [6]  Report variance explained by PC1–PCk (diagnose n_components)
-    [7]  Generate signals → reconstruct portfolio
-    [8]  Compute PnL with 15 bps transaction costs
-    [9]  Evaluate performance: Sharpe, drawdown, alpha/beta vs JETS and SPY
-    [10] Macro regime diagnostics (VIX, Brent quartiles)
-    [11] Write all output CSVs to outputs/
-
-Train / Test Discipline
-_______
-    Training  : 2015-01-01 → 2019-12-31
-        - Window length selected here (60, 90, 120, 180 days)
-        - n_components tested here (1, 2, 3)
-        - No other parameters tuned
-
-    Validation: 2022-01-01 → 2026-07-17
-        - Selected window applied unchanged
-        - All performance statistics reported from this period
+- Ledoit-Wolf covariance via rolling_covariances(use_ledoit_wolf=True)
+  - OU S-score signal via compute_ou_sscore() --> EDIT: we removed so zscores it is :)
+  - OU summary table on training data → guides window and component selection --> REDACTED
+  - Brent lead-lag diagnostic on training residuals --> lowkey useless :)
+  - construct_portfolio() with signal-proportional inverse-vol weighting
+  - apply_continuous_concentration_scaling() instead of binary filter
+  - Training period informs: window selection, OU diagnostics only
+  - Validation period: all covariance/eigenvectors/residuals computed fresh
+    with only past data — zero look-ahead
 """
+
 import warnings
 warnings.filterwarnings("ignore")
-import sys, os
-sys.path.insert(0, os.path.abspath('..'))
+
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 from pathlib import Path
 
 import data as dt
@@ -41,219 +29,210 @@ import models as md
 import backtest as bt
 
 output_dir = Path("../Outputs")
-# Reporting helpers
 
 def _section(title: str) -> None:
-    width = 60
-    print(f"\n{'=' * width}")
-    print(f"\ {title}")
-    print(f"\{'=' * width}")
-def _print_performance(perf: pd.Series, label: str) -> None:
-    pct_keys = {"annualized_returns", "annualized_volatility",
-               "max_drawdown", "hit_rate", "ann_turnover",
-               "jets_alpha_annual", "spy_alpha_annual"}
-    print(f"\n - {label} -")
+    print(f"\n{'═'*62}\n {title}\n{'═'*62}")
+
+def _print_perf(perf: pd.Series, label: str) -> None:
+    pct = {"annualized_return","annualized_volatility","max_drawdown",
+           "hit_rate","ann_turnover","spy_alpha_annual","jets_alpha_annual"}
+    print(f"\n  ── {label} ──")
     for k, v in perf.items():
         if isinstance(v, float):
-            fmt = f"{v:.2%}" if k in pct_keys else f"{v:.4f}"
+            fmt = f"{v:.2%}" if k in pct else f"{v:.4f}"
         else:
             fmt = str(v)
         print(f" {k:<35s}: {fmt}")
-def _select_window(
-    train_returns: pd.Series,
-    n_components: int,
-) -> int:
-    """
-    Run window sensitivity on the training period.
-    Select the window with the highest in-sample Sharpe ratio.
-    Report all candidates so the choice is transparent.
-    """
-    _section("Window Sensitivity - Training Period")
-    train_ret = train_returns
-
-    print(f"\n Testing windows: {md.window_candidates} days")
-    print(f" n_components = {n_components}")
-    print(f" Period: {train_ret.index[0].date()} -> {train_ret.index[-1].date()}\n")
-
-    sensitivity = md.run_window_sensitivity(train_ret, md.window_candidates, n_components)
-
-    sharpes = {}
-    for w, (residuals, zscores) in sensitivity.items():
-        signals = bt.generate_signals(zscores)
-        positions = bt.construct_portfolio(signals)
-        pc1 = md.compute_pc1_concentration(cov)
-        pc1 = pc1.reindex(positions.index)
-        positions.loc[pc1 > 0.80] = 0.0
-        
-        # Need macro returns aligned to training period for eval; simple sharpe
-        common = positions.index.intersection(train_ret.index)
-        pos_x = positions.loc[common]
-        ret_x = train_ret.loc[common]
-        pos_exec = pos_x.shift(1).fillna(0.0)
-        gross = (pos_exec * ret_x).sum(axis=1)
-        turnover = pos_exec.diff().abs().sum(axis=1) / 2
-        net = gross - turnover * bt.transaction_cost
-        net = net.dropna()
-
-        ann_r = net.mean() * bt.trading_days
-        ann_v = net.std() * np.sqrt(bt.trading_days)
-        sr = ann_r / ann_v if ann_v > 0 else np.nan
-        sharpes[w] = sr
-
-        print(f" Window {w:3d}d -> Sharpe: {sr:+.3f}"
-            f" | Ann. Return: {ann_r: .2%}"
-            f" | Ann. Vol {ann_v: .2%}")
-    best_window = max(sharpes,key=lambda k: sharpes[k] if not np.isnan(sharpes[k]) else -99)
-    print(f"\n -> Selected window: {best_window} days (best training Sharpe)")
-    return best_window
-def _report_variance_explained(expl_var_df: pd.DataFrame, period_label: str) -> None:
-    """
-    Print average variance explained by each PC.
-    """
-    avg_expl = expl_var_df.mean()
-    cumsum = avg_expl.cumsum()
-    print(f"\n Explained Variance ({period_label}):")
-    for col, val in avg_expl.items():
-        i = int(col.replace("PC", "")) - 1
-        print(f" {col}: {val:.1%} (cumulative: {cumsum.iloc[i]:.1%})")
-    print(f"\n Note: if PC1 alone explains > 65%, consider n_components = 1.")
-    print(f" If PC3 explains <5%, it may be noise - use n_components = 2.")
-# Main Pipeline
 
 def main() -> dict:
     output_dir.mkdir(exist_ok=True)
-
-    # 01 Data
-    _section("Data Loading")
+ 
+    # Data
+    _section("1 Data Loading")
     airline_returns, macro_returns, prices = dt.load_data()
-
-    # 02 Train / Test Split
-    train_mask = airline_returns.index <= dt.train_end
-    test_mask = airline_returns.index >= dt.test_start
-
-    train_airlines = airline_returns[train_mask]
-    test_airlines = airline_returns[test_mask]
-    train_macro = macro_returns[train_mask]
-    test_macro = macro_returns[test_mask]
-
-    _section("Train / Test Split")
-    print(f" Training: {train_airlines.index[0].date()} -> "
-          f"{train_airlines.index[-1].date()} ({len(train_airlines)} days)")
-    print(f" Validation: {test_airlines.index[0].date()} -> "
-          f"{test_airlines.index[-1].date()} ({len(test_airlines)} days)")
-
-    # 03 Window Selection on Training Period
-    best_window = _select_window(train_airlines, md.n_components)
-
-    # 04 Full Factor Model on Training Period
-    _section("Factor Model - Training Period")
-    cov_train = md.rolling_covariances(train_airlines, window = best_window)
-    sys_train, resid_train, evals_train, evecs_train, expl_train = \
-    md.compute_factor_model(train_airlines, cov_train, md.n_components)
-    factor_ret_train = md.compute_factor_returns(train_airlines, cov_train, md.n_components)
-    conc_train = md.compute_pc1_concentration(cov_train)
-
-    _report_variance_explained(expl_train, "Training")
-
-    zscores_train = md.compute_rolling_zscore(resid_train).dropna()
-    sig_train = bt.generate_signals(zscores_train)
-    pos_train = bt.construct_portfolio(sig_train)
-    net_train, trades_train = bt.compute_portfolio_returns(pos_train, train_airlines)
-    perf_train = bt.compute_performance(net_train, trades_train, train_macro)
-
-    _print_performance(perf_train, f"Training Results (window = {best_window}d)")
-
-    # 05 Full Factor Model on Validation Period
-    _section("Factor Model - Validation Period (Out-of-Sample)")
-    cov_test = md.rolling_covariances(test_airlines, window = best_window)
-    sys_test, resid_test, evals_test, evecs_test, expl_test = \
-    md.compute_factor_model(test_airlines, cov_test, md.n_components)
-    factor_ret_test = md.compute_factor_returns(test_airlines, cov_test, md.n_components)
-    conc_test = md.compute_pc1_concentration(cov_test)
-
-    _report_variance_explained(expl_test, "Validation")
-
-    zscores_test = md.compute_rolling_zscore(resid_test).dropna()
-    sig_test = bt.generate_signals(zscores_test)
-    pos_test = bt.construct_portfolio(sig_test)
-    net_test, trades_test = bt.compute_portfolio_returns(pos_test, test_airlines)
-    perf_test = bt.compute_performance(net_test, trades_test, test_macro)
-
-    _print_performance(perf_test, "Validation Results (Out-of-Sample)")
-
-    # 06 Macro Regime Diagnostics
-    _section("Macro Regime Diagnostics")
-    print("\n [Training Period]")
-    diag_train = bt.macro_regime_diagnostics(net_train, train_macro)
-    print(diag_train.to_string())
-
-    print("\n [Validation Period]")
-    diag_test = bt.macro_regime_diagnostics(net_test, test_macro)
-    print(diag_test.to_string())
-    print("\n Note: These are diagnostics, not trading rules.")
-    print(" If Sharpe deteriorates with VIX, consider")
-    print(" a continuous vol-scaling adjustments (not a hard threshold).")
-
-    # 07 PC1 Concentration Diagnostic
-    _section("PC1 Concentration - Diagnostic")
-    print(f"\n Training Period:")
-    print(f" Mean Concentration: {conc_train.mean():.3f}")
-    print(f" STD Concentration: {conc_train.std():.3f}")
-    print(f" Max Concentration: {conc_train.max():.3f} (stress signal)")
-    print(f"\n Validation Period:")
-    print(f" Mean Concentration: {conc_test.mean():.3f}")
-    print(f" STD Concentration: {conc_test.std():.3f}")
-    print(f" Max Concentration: {conc_test.max():.3f}")
-    print(f"\n Interpretation: Concentration > 0.65 indicates a stress")
-    print(f" regime where all airlines correlate strongly (i.e., COVID).")
-    print(f" Use as diagnostic first; test as regime filter out-of-sample.")
-
-    # 08 Save Outputs
-    _section("Saving Outputs")
-
-    # Performance: training + validation
-    perf_combined = pd.concat(
-        [perf_train.rename("training"), perf_test.rename("validation")],
-        axis = 1
+ 
+    # Train / Test Split
+    _section("2 Train / Test Split")
+    train_air = airline_returns[airline_returns.index <= dt.train_end]
+    test_air = airline_returns[airline_returns.index >= dt.test_start]
+    train_macro = macro_returns[macro_returns.index <= dt.train_end]
+    test_macro = macro_returns[macro_returns.index >= dt.test_start]
+    print(f" Training: {train_air.index[0].date()} → {train_air.index[-1].date()}"
+          f" ({len(train_air)} days)")
+    print(f" Validation: {test_air.index[0].date()} → {test_air.index[-1].date()}"
+          f" ({len(test_air)} days)")
+ 
+    # Training Diagnostics
+    _section("3 Training Diagnostics")
+ 
+    # Use LW covariance for diagnostics
+    cov_diag = md.rolling_covariances(train_air, window=md.lookback,
+                                      use_ledoit_wolf=True)
+    _, resid_diag, _, _, expl_diag = md.compute_factor_model(
+        train_air, cov_diag, md.n_components
     )
-    perf_combined.to_csv(output_dir / "performance.csv")
+ 
+    print(f"\n Avg explained variance (training):")
+    for col, val in expl_diag.mean().items():
+        print(f" {col}: {val:.1%}")
+ 
+    brent_lag = md.compute_brent_leadlag(resid_diag, train_macro, max_lag=3)
+    if len(brent_lag) > 0:
+        brent_lag.to_csv(output_dir / "brent_leadlag.csv")
 
-    # Validation period outputs
-    sig_test.to_csv(output_dir / "signals.csv")
-    trades_test.to_csv(output_dir / "trades.csv")
-    resid_test.to_csv(output_dir / "residuals.csv")
-    factor_ret_test.to_csv(output_dir / "factor_returns.csv")
-    evals_test.to_csv(output_dir / "eigenvalues.csv")
-    evecs_test.to_csv(output_dir / "eigenvectors.csv")
-    expl_test.to_csv(output_dir / "explained_variance.csv")
+    zscore_window = 20
+    print(f"Z-score window: {zscore_window} days")
 
-    # Diagnostics
-    conc_combined = pd.concat([conc_train, conc_test]).rename("pc1_concentration")
-    conc_combined.to_csv(output_dir / "pc1_concentration.csv")
-
-    diag_combined = pd.concat(
-        [diag_train.add_suffix("_train"), diag_test.add_suffix("_test")],
-        axis=1
+    # Window Selection on Training Period
+    _section("4 Window Sensitivity (Training Period)")
+    print(f" Candidates: {md.window_candidates} days")
+ 
+    best_sr = -np.inf
+    best_win = md.lookback
+ 
+    for w in md.window_candidates:
+        print(f" Window {w:3d}d ... ", end="", flush=True)
+        cov_w = md.rolling_covariances(train_air, window=w, use_ledoit_wolf=True)
+        
+        sys_w, res_w, eval_w, evec_w, expl_w = md.compute_factor_model(train_air, cov_w, md.n_components)
+        zs_w = md.compute_rolling_zscore(res_w, window=zscore_window).dropna()
+        zs_w  = zs_w.ewm(span=5, min_periods=3).mean()
+        conc_w = md.compute_pc1_concentration(cov_w)
+        
+        if len(zs_w) == 0:
+            print("no signal"); continue
+ 
+        sig_w  = bt.generate_signals(zs_w, top_n=bt.top_n,exit_ = bt.exit_threshold,
+                                      min_hold=bt.min_hold_days, momentum = True)
+        pos_w  = bt.construct_portfolio(sig_w, zscores=zs_w, residuals=res_w)
+        pos_ws = bt.apply_continuous_concentration_scaling(pos_w, conc_w)
+        net_w, trades_w = bt.compute_portfolio_returns(pos_ws, train_air)
+        net_w = net_w.dropna()
+ 
+        if len(net_w) < 30:
+            print("insufficient data"); continue
+ 
+        ar = net_w.mean() * bt.trading_days
+        av = net_w.std() * np.sqrt(bt.trading_days)
+        sr = ar / av if av > 0 else np.nan
+        to = trades_w['turnover'].mean() * bt.trading_days
+        print(f"Sharpe: {sr:+.3f} | Ann.Ret: {ar:.2%} | Turnover: {to:.2f}")
+ 
+        if pd.notna(sr) and sr > best_sr:
+            best_sr  = sr
+            best_win = w
+ 
+    print(f"\n Best window: {best_win} days (training Sharpe: {best_sr:+.3f})")
+ 
+    # Full Pipeline — Training
+    _section("5 Full Pipeline — Training Period")
+    cov_tr  = md.rolling_covariances(train_air, window=best_win, use_ledoit_wolf=True)
+    sys_tr, res_tr, eval_tr, evec_tr, expl_tr = md.compute_factor_model(
+        train_air, cov_tr, md.n_components
     )
-    diag_combined.to_csv(output_dir / "macro_diagnostics.csv")
-
-    print(f"\n All outputs saved to {output_dir.resolve()}/")
-
+    conc_tr = md.compute_pc1_concentration(cov_tr)
+    fr_tr = md.compute_factor_returns(train_air, cov_tr, md.n_components)
+    zs_tr = md.compute_rolling_zscore(res_tr, window=zscore_window).dropna()
+    zs_tr = zs_tr.ewm(span=3, min_periods=2).mean()
+ 
+    sig_tr = bt.generate_signals(zs_tr, top_n=bt.top_n, exit_ = bt.exit_threshold, min_hold=bt.min_hold_days, momentum = True)
+    pos_tr = bt.construct_portfolio(sig_tr, zscores=zs_tr, residuals=res_tr)
+    pos_trs = bt.apply_continuous_concentration_scaling(pos_tr, conc_tr)
+    pos_trs = bt.apply_macro_regime_filter(pos_trs, train_macro)
+    net_tr, trades_tr = bt.compute_portfolio_returns(pos_trs, train_air)
+    perf_tr = bt.compute_performance(net_tr, trades_tr, train_macro)
+    _print_perf(perf_tr, f"Training (window={best_win}d)")
+ 
+    # Full Pipeline — Validation
+    _section("6 Full Pipeline — Validation (Out-of-Sample)")
+    cov_te  = md.rolling_covariances(test_air, window=best_win, use_ledoit_wolf=True)
+    sys_te, res_te, eval_te, evec_te, expl_te = md.compute_factor_model(
+        test_air, cov_te, md.n_components
+    )
+    conc_te = md.compute_pc1_concentration(cov_te)
+    fr_te = md.compute_factor_returns(test_air, cov_te, md.n_components)
+    zs_te = md.compute_rolling_zscore(res_te, window=zscore_window).dropna()
+    zs_te = zs_te.ewm(span=3, min_periods=2).mean()
+ 
+    sig_te = bt.generate_signals(zs_te, top_n=bt.top_n, exit_ = bt.exit_threshold, min_hold=bt.min_hold_days, momentum = True)
+    pos_te = bt.construct_portfolio(sig_te, zscores=zs_te, residuals=res_te)
+    pos_tes = bt.apply_continuous_concentration_scaling(pos_te, conc_te)
+    pos_tes = bt.apply_macro_regime_filter(pos_tes, test_macro)
+    net_te, trades_te = bt.compute_portfolio_returns(pos_tes, test_air)
+    perf_te = bt.compute_performance(net_te, trades_te, test_macro)
+    _print_perf(perf_te, "Validation (Out-of-Sample)")
+ 
+    # Macro Diagnostics
+    _section("7 Macro Regime Diagnostics — Validation")
+    diag = bt.macro_regime_diagnostics(net_te, test_macro)
+    print(diag.to_string())
+ 
+    # Plots
+    _section("8 Plots")
+ 
+    fig, axes = plt.subplots(3, 1, figsize=(14, 14))
+ 
+    # Cumulative returns
+    (1 + net_tr).cumprod().plot(ax=axes[0], color='steelblue',
+        label=f"Training  SR={perf_tr['sharpe_ratio']:.2f}", linewidth=1.5)
+    (1 + net_te).cumprod().plot(ax=axes[0], color='darkgreen',
+        label=f"Validation SR={perf_te['sharpe_ratio']:.2f}", linewidth=1.5)
+    axes[0].axhline(1.0, color='black', linestyle='--', linewidth=0.8)
+    axes[0].axvline(pd.Timestamp(dt.test_start), color='red',
+                    linestyle=':', linewidth=1.0, label='Train/Test Split')
+    axes[0].set_title("Cumulative Returns — Net of 15bps")
+    axes[0].set_ylabel("Growth of $1")
+    axes[0].legend()
+ 
+    # PC1 concentration
+    conc_all = pd.concat([conc_tr, conc_te])
+    conc_all.plot(ax=axes[1], color='tomato', linewidth=1.0, alpha=0.8)
+    axes[1].axhline(bt.conc_zero, color='red', linestyle='--',
+                    label=f"Zero exposure ({bt.conc_zero:.0%})")
+    axes[1].axhline(bt.conc_full, color='orange', linestyle='--',
+                    label=f"Full exposure ({bt.conc_full:.0%})")
+    axes[1].set_title("PC1 Concentration — Continuous Exposure Scaling")
+    axes[1].set_ylabel("λ₁ / Σλᵢ")
+    axes[1].legend()
+ 
+    # Drawdown
+    cum_te = (1 + net_te.dropna()).cumprod()
+    dd_te = (cum_te - cum_te.cummax()) / cum_te.cummax()
+    dd_te.plot(ax=axes[2], color='crimson', linewidth=1.0)
+    axes[2].fill_between(dd_te.index, dd_te, 0, alpha=0.3, color='crimson')
+    axes[2].set_title(f"Validation Drawdown  (MDD: {perf_te['max_drawdown']:.1%})")
+    axes[2].set_ylabel("Drawdown")
+ 
+    plt.tight_layout()
+    plt.savefig(output_dir / "strategy_overview.png", dpi=150)
+    plt.close()
+    print(f" Saved strategy_overview.png")
+ 
+    # Save CSVs
+    _section("9 Saving Outputs")
+    perf_both = pd.concat(
+        [perf_tr.rename("training"), perf_te.rename("validation")], axis=1
+    )
+    perf_both.to_csv(output_dir / "performance.csv")
+    pos_tes.to_csv(output_dir / "signals.csv")
+    trades_te.to_csv(output_dir / "trades.csv")
+    res_te.to_csv(output_dir / "residuals.csv")
+    zs_te.to_csv(output_dir / "zscores.csv")
+    fr_te.to_csv(output_dir / "factor_returns.csv")
+    eval_te.to_csv(output_dir / "eigenvalues.csv")
+    evec_te.to_csv(output_dir / "eigenvectors.csv")
+    expl_te.to_csv(output_dir / "explained_variance.csv")
+    conc_all.to_csv(output_dir / "pc1_concentration.csv")
+    net_te.to_frame("net_return").to_csv(output_dir / "net_returns.csv")
+    print(f"  All outputs saved → {output_dir.resolve()}/")
+ 
     _section("Pipeline Complete")
-
-    return {
-       "perf_train": perf_train,
-        "perf_test": perf_test,
-        "net_train": net_train,
-        "net_test": net_test,
-        "residuals_train": resid_train,
-        "residuals_test": resid_test,
-        "zscores_test": zscores_test,
-        "eigenvalues_test":  evals_test,
-        "expl_var_test": expl_test,
-        "best_window": best_window,
-        "diag_train": diag_train,
-        "diag_test": diag_test,
-    } 
+    return dict(
+        perf_train = perf_tr, perf_test = perf_te,
+        net_train = net_tr, net_test = net_te,
+        best_window = best_win,
+        zscore_window = zscore_window,
+    )
+ 
 if __name__ == "__main__":
     results = main()
