@@ -23,7 +23,7 @@ import scipy.stats as stats
 
 
 # Strategic Parameters
-entry_threshold = 1.5 # Z-score to enter
+entry_threshold = 1.75 # Z-score to enter
 exit_threshold = 0.75 # |z| below which we exit
 min_hold_days = 5 # minimum days before exit allowed
 conc_full = 0.40 # below this: full exposure (normal regime)

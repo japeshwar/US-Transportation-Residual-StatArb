@@ -80,7 +80,7 @@ def main() -> dict:
     if len(brent_lag) > 0:
         brent_lag.to_csv(output_dir / "brent_leadlag.csv")
 
-    zscore_window = 20
+    zscore_window = 45
     print(f"Z-score window: {zscore_window} days")
 
     # Window Selection on Training Period
@@ -96,14 +96,13 @@ def main() -> dict:
         
         sys_w, res_w, eval_w, evec_w, expl_w = md.compute_factor_model(train_air, cov_w, md.n_components)
         zs_w = md.compute_rolling_zscore(res_w, window=zscore_window).dropna()
-        zs_w  = zs_w.ewm(span=5, min_periods=3).mean()
         conc_w = md.compute_pc1_concentration(cov_w)
         
         if len(zs_w) == 0:
             print("no signal"); continue
  
         sig_w  = bt.generate_signals(zs_w, top_n=bt.top_n,exit_ = bt.exit_threshold,
-                                      min_hold=bt.min_hold_days, momentum = True)
+                                      min_hold=bt.min_hold_days, momentum = False)
         pos_w  = bt.construct_portfolio(sig_w, zscores=zs_w, residuals=res_w)
         pos_ws = bt.apply_continuous_concentration_scaling(pos_w, conc_w)
         net_w, trades_w = bt.compute_portfolio_returns(pos_ws, train_air)
@@ -133,9 +132,8 @@ def main() -> dict:
     conc_tr = md.compute_pc1_concentration(cov_tr)
     fr_tr = md.compute_factor_returns(train_air, cov_tr, md.n_components)
     zs_tr = md.compute_rolling_zscore(res_tr, window=zscore_window).dropna()
-    zs_tr = zs_tr.ewm(span=3, min_periods=2).mean()
  
-    sig_tr = bt.generate_signals(zs_tr, top_n=bt.top_n, exit_ = bt.exit_threshold, min_hold=bt.min_hold_days, momentum = True)
+    sig_tr = bt.generate_signals(zs_tr, top_n=bt.top_n, exit_ = bt.exit_threshold, min_hold=bt.min_hold_days, momentum = False)
     pos_tr = bt.construct_portfolio(sig_tr, zscores=zs_tr, residuals=res_tr)
     pos_trs = bt.apply_continuous_concentration_scaling(pos_tr, conc_tr)
     pos_trs = bt.apply_macro_regime_filter(pos_trs, train_macro)
@@ -152,9 +150,8 @@ def main() -> dict:
     conc_te = md.compute_pc1_concentration(cov_te)
     fr_te = md.compute_factor_returns(test_air, cov_te, md.n_components)
     zs_te = md.compute_rolling_zscore(res_te, window=zscore_window).dropna()
-    zs_te = zs_te.ewm(span=3, min_periods=2).mean()
  
-    sig_te = bt.generate_signals(zs_te, top_n=bt.top_n, exit_ = bt.exit_threshold, min_hold=bt.min_hold_days, momentum = True)
+    sig_te = bt.generate_signals(zs_te, top_n=bt.top_n, exit_ = bt.exit_threshold, min_hold=bt.min_hold_days, momentum = False)
     pos_te = bt.construct_portfolio(sig_te, zscores=zs_te, residuals=res_te)
     pos_tes = bt.apply_continuous_concentration_scaling(pos_te, conc_te)
     pos_tes = bt.apply_macro_regime_filter(pos_tes, test_macro)
@@ -213,6 +210,9 @@ def main() -> dict:
     perf_both = pd.concat(
         [perf_tr.rename("training"), perf_te.rename("validation")], axis=1
     )
+    prices.to_csv(output_dir / "prices.csv")
+    airline_returns.to_csv(output_dir / "airline_returns.csv")
+    macro_returns.to_csv(output_dir / "macro_returns.csv")
     perf_both.to_csv(output_dir / "performance.csv")
     pos_tes.to_csv(output_dir / "signals.csv")
     trades_te.to_csv(output_dir / "trades.csv")

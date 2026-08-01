@@ -21,7 +21,7 @@ from sklearn.covariance import LedoitWolf
 import matplotlib.pyplot as plt
 
 lookback = 90 # Default rolling covariance window (trading days)
-zscore_window = 20 # Rolling z-score window (trading days)
+zscore_window = 45 # Rolling z-score window (trading days)
 n_components = 3 # Default # of PCs
 max_half_life = 15 # Days -- skip stocks with slower mean reversion
 
