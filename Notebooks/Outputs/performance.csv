@@ -1,0 +1,15 @@
+,strategy
+annualized_returns,-0.0069
+annualized_volatility,0.0589
+sharpe_ratio,-0.117
+max_drawdown,-0.0971
+calmar_ratio,-0.071
+hit_rate,0.4663
+ann_turnover,21.225
+active_days,905.0
+total_days,954.0
+spy_alpha_annual,-0.0062
+spy_alpha_tstat,-0.205
+spy_beta,-0.0036
+spy_r2,0.0001
+spy_correlation,-0.0091

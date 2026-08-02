@@ -1,16 +1,7 @@
 """
 models.py
 ==============
-Dynamic Airline Factor Laboratory
-_______
-Redesigned per research roadmap:
-  1. Ledoit-Wolf shrinkage covariance (replaces sample covariance)
-  2. OU parameter estimation — half-life, mean-reversion speed, sigma
-  3. OU S-score signal (replaces plain rolling z-score)
-  4. Brent crude lead-lag diagnostic
-  5. PC1 concentration (continuous, not binary)
- 
-All look-ahead bias controls preserved from v1.
+Dynamic Transportation Factor Laboratory
 """
 import warnings
 warnings.filterwarnings("ignore")
@@ -23,9 +14,8 @@ import matplotlib.pyplot as plt
 lookback = 90 # Default rolling covariance window (trading days)
 zscore_window = 45 # Rolling z-score window (trading days)
 n_components = 3 # Default # of PCs
-max_half_life = 15 # Days -- skip stocks with slower mean reversion
 
-window_candidates = [45,60,90,120,180, 240]
+window_candidates = [45, 60, 90, 120, 180, 240]
 
 def rolling_covariances(
     returns: pd.DataFrame,
@@ -42,34 +32,12 @@ def rolling_covariances(
     _______
     returns: pd.DataFrame (T × N) — daily log returns
     window: int — lookback in trading days
-    use_ledoit_wolf: bool — True = LW shrinkage,
-                            False = sample covariance
+    use_ledoit_wolf: bool — True = LW shrinkage, False = sample covariance
  
     Outputs
     _______
     dict {pd.Timestamp → np.ndarray (N × N)}
     Key t uses returns [t-window, t-1]. Day t excluded — no look-ahead.
- 
-    Why Ledoit-Wolf Shrinkage
-    _______
-    The sample covariance matrix Σ_sample = (1/(T-1)) XᵀX has estimation
-    error that grows with N/T. For N=6 assets and T=90 days, N/T = 0.067,
-    which seems small but off-diagonal covariance estimates are still noisy.
- 
-    Ledoit-Wolf finds the optimal linear combination:
-        Σ_LW = (1-α)·Σ_sample + α·μ·I
- 
-    where α (shrinkage coefficient) and μ (target) are analytically derived
-    to minimize the expected Frobenius distance between Σ_LW and the true Σ.
- 
-    In practice: Σ_LW has smaller off-diagonal elements (less spurious
-    correlation), making eigenvectors more stable across rolling windows
-    and portfolio weights less extreme.
- 
-    Look-Ahead Prevention
-    _______
-    Window iloc[i-window : i] uses only returns up to day i-1.
-    Day i return is excluded from every matrix it helps estimate.
     """
     
     cov_matrices: Dict[pd.Timestamp, np.ndarray] = {}
@@ -79,7 +47,7 @@ def rolling_covariances(
         # window is [i-window, i-1]: excludes current day i
         window_returns = returns.iloc[i-window:i]
         if use_ledoit_wolf:
-            lw = LedoitWolf(assume_centered=False).fit(window_returns.values)
+            lw = LedoitWolf(assume_centered = False).fit(window_returns.values)
             cov = lw.covariance_ * 252
         else:
             cov = window_returns.cov().values * 252
@@ -96,19 +64,8 @@ def run_pca(
     """
     Purpose
     _______
-    Eigendecompose the covariance matrix. Return top-k components.
- 
-    Inputs
-    _______
-    cov_matrix: np.ndarray (N × N)
-    n_components : int
- 
-    Outputs
-    _______
-    eigenvalues: np.ndarray (k,)
-    eigenvectors: np.ndarray (N × k)
-    explained_variance: np.ndarray (k,)
- 
+    Eigendecompose the covariance matrix. Return top 3 components.
+    
     Sign Convention
     _______
     Largest absolute loading constrained positive per eigenvector.
@@ -129,11 +86,7 @@ def run_pca(
     total_var = eigenvalues.sum()
     expl = eigenvalues / total_var if total_var > 0 else np.zeros_like(eigenvalues)
  
-    return (
-        eigenvalues[:n_components],
-        eigenvectors[:, :n_components],
-        expl[:n_components],
-    )
+    return (eigenvalues[:n_components], eigenvectors[:, :n_components], expl[:n_components])
     
 # Factor Model + Residual
 
@@ -147,23 +100,15 @@ def compute_factor_model(
     _______
     Decompose returns into systematic (factor) and idiosyncratic (residual)
     components using rolling PCA projection.
- 
-    Outputs
-    _______
-    systematic: pd.DataFrame (T × N)  — r̂ = P r
-    residuals: pd.DataFrame (T × N)  — ε = r − r̂
-    eigenvalue_df: pd.DataFrame (T × k)
-    eigenvector_df: pd.DataFrame (T × Nk)
-    expl_var_df: pd.DataFrame (T × k)
     """
     
     tickers = returns.columns.tolist()
     k = n_components
     pc_cols = [f"PC{i+1}" for i in range(k)]
  
-    sys_rows  = []; res_rows  = []
-    eval_rows = []; evec_rows = []; expl_rows = []
-    dates_out = []
+    sys_rows = []; res_rows = [];
+    eval_rows = []; evec_rows = [];
+    expl_rows = []; dates_out = []
  
     for date in returns.index:
         if date not in cov_matrices:
@@ -173,9 +118,9 @@ def compute_factor_model(
         cov = cov_matrices[date]
  
         evals, evecs, expl = run_pca(cov, k)
-        P = evecs @ evecs.T
+        P = evecs @ evecs.T # Transpose
         r_hat = P @ r_t
-        eps = r_t - r_hat
+        eps = r_t - r_hat # Epsilon
  
         dates_out.append(date)
         sys_rows.append(r_hat)
@@ -186,11 +131,11 @@ def compute_factor_model(
  
     evec_cols = [f"PC{i+1}_{t}" for i in range(k) for t in tickers]
  
-    systematic = pd.DataFrame(sys_rows, index=dates_out, columns=tickers)
-    residuals = pd.DataFrame(res_rows, index=dates_out, columns=tickers)
-    eigenvalue_df = pd.DataFrame(eval_rows, index=dates_out, columns=pc_cols)
-    expl_var_df = pd.DataFrame(expl_rows, index=dates_out, columns=pc_cols)
-    eigenvector_df = pd.DataFrame(evec_rows, index=dates_out, columns=evec_cols)
+    systematic = pd.DataFrame(sys_rows, index = dates_out, columns = tickers)
+    residuals = pd.DataFrame(res_rows, index = dates_out, columns = tickers)
+    eigenvalue_df = pd.DataFrame(eval_rows, index = dates_out, columns = pc_cols)
+    expl_var_df = pd.DataFrame(expl_rows, index = dates_out, columns = pc_cols)
+    eigenvector_df = pd.DataFrame(evec_rows, index = dates_out, columns = evec_cols)
  
     return systematic, residuals, eigenvalue_df, eigenvector_df, expl_var_df
     
@@ -212,16 +157,16 @@ def compute_factor_returns(
         _, evecs, _ = run_pca(cov_matrices[date], n_components)
         rows.append(evecs.T @ returns.loc[date].values)
         dates.append(date)
-    return pd.DataFrame(rows, index=dates, columns=pc_cols)
+    return pd.DataFrame(rows, index = dates, columns = pc_cols)
 
-# Rolling Z-scores (we will be keeping this as the S-scores didn't work at all)
+# Rolling Z-scores (we will be keeping this as the S-scores didn't work at all, so we redacted it)
 
 def compute_rolling_zscore(
     residuals: pd.DataFrame,
     window: int = zscore_window,
 ) -> pd.DataFrame:
-    mu  = residuals.rolling(window=window, min_periods=10).mean()
-    sig = residuals.rolling(window=window, min_periods=10).std().replace(0, np.nan)
+    mu = residuals.rolling(window = window, min_periods = 10).mean()
+    sig = residuals.rolling(window = window, min_periods = 10).std().replace(0, np.nan)
     return (residuals - mu) / sig
     
 # PC1 Concentration
@@ -239,7 +184,7 @@ def compute_pc1_concentration(
         evals = np.maximum(np.linalg.eigvalsh(cov), 0.0)
         total = evals.sum()
         records[date] = evals[-1] / total if total > 0 else np.nan
-    return pd.Series(records, name="pc1_concentration")
+    return pd.Series(records, name = "pc1_concentration")
  
 # Brent Lead-Lag Diagnostic
  
@@ -251,24 +196,8 @@ def compute_brent_leadlag(
     """
     Purpose
     _______
-    Test whether lagged Brent crude returns predict airline residuals.
+    Test whether lagged Brent crude returns predict transportation residuals.
     Identifies potential leading indicator to improve signal timing.
- 
-    Inputs
-    _______
-    residuals: pd.DataFrame — airline PCA residuals
-    macro_returns: pd.DataFrame — must contain 'Brent' column
-    max_lag: int — test lags 1 through max_lag
- 
-    Outputs
-    _______
-    pd.DataFrame — correlation of Brent(t-lag) with residual(t) for each lag and each airline
- 
-    Interpretation
-    _______
-    If Brent(t-1) has correlation −0.30 with DAL residual(t):
-        A 1-day rise in Brent predicts a NEGATIVE residual for DAL
-        (oil cost shock not yet priced → airlines underperform factor model)
  
     Trading application:
         On days of large Brent moves, pre-position before z-score crosses
@@ -281,8 +210,8 @@ def compute_brent_leadlag(
         - Stable across sub-periods
  
     Assumptions
-    -----------
-    - 'Brent' column must exist in macro_returns (case-sensitive)
+    _______
+    - 'Brent' column must exist in macro_returns
     - Correlations computed on aligned dates only
     """
     if 'Brent' not in macro_returns.columns:
@@ -290,7 +219,7 @@ def compute_brent_leadlag(
         print(f"Available columns: {macro_returns.columns.tolist()}")
         return pd.DataFrame()
  
-    brent  = macro_returns['Brent']
+    brent = macro_returns['Brent']
     common = residuals.index.intersection(brent.index)
     res = residuals.loc[common]
     br = brent.loc[common]
@@ -299,7 +228,7 @@ def compute_brent_leadlag(
     for lag in range(1, max_lag + 1):
         row = {'lag': lag}
         for col in res.columns:
-            aligned = pd.concat([br.shift(lag), res[col]], axis=1).dropna()
+            aligned = pd.concat([br.shift(lag), res[col]], axis = 1).dropna()
             if len(aligned) > 30:
                 row[col] = round(aligned.iloc[:, 0].corr(aligned.iloc[:, 1]), 4)
             else:
@@ -308,6 +237,6 @@ def compute_brent_leadlag(
  
     df = pd.DataFrame(rows).set_index('lag')
     print("\n=== Brent Lead-Lag Correlations ===")
-    print("(negative = Brent rise predicts airline underperformance)")
+    print("(negative = Brent rise predicts stocks underperformance)")
     print(df.round(4).to_string())
     return df
