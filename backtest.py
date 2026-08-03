@@ -35,7 +35,6 @@ def generate_signals(
 ) -> pd.DataFrame:
     """
     Clean mean-reversion / momentum signal generator.
-    No slope filter – pure z-score based.
     """
     cols = zscores.columns.tolist()
     signals = pd.DataFrame(0.0, index=zscores.index, columns=cols)
@@ -72,13 +71,13 @@ def generate_signals(
         n_short_open = sum(1 for t in cols if new[t] == -1.0)
         
         if long_cands and n_long_open < top_n:
-            ranked = sorted(long_cands.items(), key=lambda x: x[1])  # most negative first
+            ranked = sorted(long_cands.items(), key=lambda x: x[1]) # most negative first
             for t, _ in ranked[:top_n - n_long_open]:
                 new[t] = 1.0
                 hold_cnt[t] = 0
                 
         if short_cands and n_short_open < top_n:
-            ranked = sorted(short_cands.items(), key=lambda x: x[1], reverse=True)  # most positive first
+            ranked = sorted(short_cands.items(), key=lambda x: x[1], reverse=True) # most positive first
             for t, _ in ranked[:top_n - n_short_open]:
                 new[t] = -1.0
                 hold_cnt[t] = 0
@@ -198,7 +197,7 @@ def apply_macro_regime_filter(
         b = brent_pct.get(date, 0.5)
         
         # Continuous scale: 1.0 at low stress → 0.0 at extreme stress
-        vix_scale = np.clip(1.5 - 1.5 * v, 0.0, 1.0)      # full size until ~33rd pct, then linear down
+        vix_scale = np.clip(1.5 - 1.5 * v, 0.0, 1.0) # full size until ~33rd pct, then linear down
         brent_scale = np.clip(1.4 - 1.4 * b, 0.0, 1.0)
         
         scale = min(vix_scale, brent_scale)
@@ -212,25 +211,17 @@ def compute_portfolio_returns(
     cost: float = transaction_cost,
     turnover_budget: float = max_daily_turnover,
 ) -> Tuple[pd.Series, pd.DataFrame]:
-    """
-    Shift positions 1 day (execute at t+1), compute net returns.
- 
-    Gross: R_t = Σᵢ w_{i,t-1} · r_{i,t}
-    Turnover: TO_t = Σᵢ |w_{i,t} − w_{i,t-1}| / 2
-    Cost: cost_t = TO_t × 0.0015
-    Net: R_net,t = R_t − cost_t
-    """
     common = positions.index.intersection(returns.index)
     pos = positions.loc[common].copy()
     ret = returns.loc[common, positions.columns].copy()
     pos_executed = pos.shift(1).fillna(0.0)
     pos_prev = pos_executed.shift(1).fillna(0.0)
     pos_change = pos_executed - pos_prev
-    raw_to = pos_change.abs().sum(axis=1) / 2
-    scale = (turnover_budget / raw_to).clip(upper=1.0).replace([np.inf], 1.0)
-    pos_executed = pos_prev + pos_change.multiply(scale, axis=0)
-    gross_ret = (pos_executed * ret).sum(axis=1)
-    turnover = pos_executed.diff().abs().sum(axis=1) / 2
+    raw_to = pos_change.abs().sum(axis = 1) / 2
+    scale = (turnover_budget / raw_to).clip(upper = 1.0).replace([np.inf], 1.0)
+    pos_executed = pos_prev + pos_change.multiply(scale, axis = 0)
+    gross_ret = (pos_executed * ret).sum(axis = 1)
+    turnover = pos_executed.diff().abs().sum(axis = 1) / 2
     turnover.iloc[0] = pos_executed.iloc[0].abs().sum() / 2
     cost_drag = turnover * cost
     net_ret = gross_ret - cost_drag
@@ -240,9 +231,9 @@ def compute_portfolio_returns(
         "turnover": turnover,
         "transaction_cost": cost_drag,
         "net_return": net_ret,
-        "n_longs": (pos_executed > 0).sum(axis=1),
-        "n_shorts": (pos_executed < 0).sum(axis=1),
-        "gross_exposure": pos_executed.abs().sum(axis=1),
+        "n_longs": (pos_executed > 0).sum(axis = 1),
+        "n_shorts": (pos_executed < 0).sum(axis = 1),
+        "gross_exposure": pos_executed.abs().sum(axis = 1),
     })
     return net_ret, trades
  
@@ -250,15 +241,8 @@ def benchmark_regression(
     net_returns: pd.Series,
     macro_returns: pd.DataFrame,
 ) -> pd.Series:
-    """
-    OLS regression vs SPY and JETS.
-    Target: β≈0, α>0, |t_α|>2, R²<0.10
- 
-    alpha_annual = alpha_daily × 252
-    t-stat = alpha / SE(alpha) — must exceed 2.0 for significance
-    """
     result = {}
-    for bench in ["SPY", "JETS"]:
+    for bench in ["SPY", "IYT"]:
         if bench not in macro_returns.columns:
             continue
         common = net_returns.index.intersection(macro_returns.index)
@@ -269,7 +253,7 @@ def benchmark_regression(
         if len(y) < 30: continue
  
         X = np.column_stack([np.ones(len(x)), x])
-        beta = np.linalg.lstsq(X, y, rcond=None)[0]
+        beta = np.linalg.lstsq(X, y, rcond = None)[0]
         a, b = beta
         yhat = X @ beta
         res = y - yhat
@@ -294,10 +278,6 @@ def compute_performance(
     macro_returns: pd.DataFrame,
     rf: float = 0.0,
 ) -> pd.Series:
-    """
-    Full performance statistics: Sharpe, MDD, Calmar, Hit Rate,
-    Turnover, Alpha, Beta, R², Correlation vs benchmarks.
-    """
     r = net_returns.dropna()
     if len(r) == 0:
         return pd.Series({"error": "No returns"})
@@ -332,10 +312,6 @@ def macro_regime_diagnostics(
     net_returns: pd.Series,
     macro_returns: pd.DataFrame,
 ) -> pd.DataFrame:
-    """
-    Sharpe by VIX and Brent quartile. Diagnostic — not a trading rule.
-    Column name 'Brent' (title case) must match data.py.
-    """
     common = net_returns.index.intersection(macro_returns.index)
     r = net_returns.loc[common]
     macro = macro_returns.loc[common]

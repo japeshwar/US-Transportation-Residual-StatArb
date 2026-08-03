@@ -1,4 +1,4 @@
-name: airline_lab
+name: transport_statarb
 channels:
   - conda-forge
   - defaults
@@ -6,9 +6,11 @@ dependencies:
   - python=3.11
   - numpy
   - pandas
+  - matplotlib
+  - yfinance
+  - scikit-learn
+  - statsmodels
   - scipy
   - jupyter
+  - notebook
   - ipykernel
-  - pip
-  - pip:
-    - yfinance

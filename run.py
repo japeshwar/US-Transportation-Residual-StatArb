@@ -2,7 +2,6 @@
 run.py
 ===========
 Dynamic Transportation Factor Laboratory
-Simple Residual vs SPY + IYT
 """
 
 import warnings
@@ -39,15 +38,11 @@ def _print_perf(perf: pd.Series, label: str) -> None:
 def main() -> dict:
     output_dir.mkdir(exist_ok = True)
 
-    # =========================================================
     # 1. Data
-    # =========================================================
     _section("1 Data Loading")
     stocks_returns, macro_returns, prices = dt.load_data()
 
-    # =========================================================
     # 2. Train / Test Split
-    # =========================================================
     _section("2 Train / Test Split")
     train_stocks = stocks_returns[stocks_returns.index <= dt.train_end]
     test_stocks = stocks_returns[stocks_returns.index >= dt.test_start]
@@ -60,9 +55,7 @@ def main() -> dict:
     zscore_window = 45
     residual_window = 90
 
-    # =========================================================
     # 3. Full Pipeline — Training
-    # =========================================================
     _section("3 Full Pipeline — Training Period")
 
     factor_returns_train = train_macro[['SPY', 'IYT']]
@@ -84,9 +77,7 @@ def main() -> dict:
     perf_train = bt.compute_performance(net_train, trades_train, train_macro)
     _print_perf(perf_train, "Training")
 
-    # =========================================================
     # 4. Full Pipeline — Validation
-    # =========================================================
     _section("4 Full Pipeline — Validation (Out-of-Sample)")
 
     factor_returns_test = test_macro[['SPY', 'IYT']]
@@ -108,42 +99,34 @@ def main() -> dict:
     perf_test = bt.compute_performance(net_test, trades_test, test_macro)
     _print_perf(perf_test, "Validation (Out-of-Sample)")
 
-    # =========================================================
     # 5. Plots
-    # =========================================================
     _section("5 Plots")
 
-    fig, axes = plt.subplots(2, 1, figsize=(14, 10))
+    fig, axes = plt.subplots(2, 1, figsize = (14, 10))
 
     (1 + net_train).cumprod().plot(ax = axes[0], color = 'steelblue',
                                    label = f"Training SR = {perf_train['sharpe_ratio']:.2f}", linewidth = 1.5)
-    (1 + net_test).cumprod().plot(ax = axes[0], color='darkgreen',
+    (1 + net_test).cumprod().plot(ax = axes[0], color = 'darkgreen',
                                   label=f"Validation SR = {perf_test['sharpe_ratio']:.2f}", linewidth = 1.5)
-    axes[0].axhline(1.0, color='black', linestyle='--', linewidth = 0.8)
+    axes[0].axhline(1.0, color = 'black', linestyle = '--', linewidth = 0.8)
     axes[0].axvline(pd.Timestamp(dt.test_start), color = 'red', linestyle = ':', label = 'Train/Test Split')
     axes[0].set_title("Cumulative Returns — Net of Costs")
     axes[0].legend()
     axes[0].grid(alpha = 0.3)
-
     cum_test = (1 + net_test.dropna()).cumprod()
     dd_test = (cum_test - cum_test.cummax()) / cum_test.cummax()
     dd_test.plot(ax = axes[1], color='crimson', linewidth = 1.0)
-    axes[1].fill_between(dd_test.index, dd_test, 0, alpha=0.3, color='crimson')
+    axes[1].fill_between(dd_test.index, dd_test, 0, alpha = 0.3, color = 'crimson')
     axes[1].set_title(f"Validation Drawdown (MDD: {perf_test['max_drawdown']:.1%})")
     axes[1].grid(alpha = 0.3)
-
     plt.tight_layout()
     plt.savefig(output_dir / "strategy_overview.png", dpi=150)
     plt.close()
     print("Saved strategy_overview.png")
 
-    # =========================================================
     # 6. Save Outputs
-    # =========================================================
     _section("6 Saving Outputs")
-
     perf_both = pd.concat([perf_train.rename("Training"), perf_test.rename("Validation")], axis = 1)
-
     prices.to_csv(output_dir / "prices.csv")
     stocks_returns.to_csv(output_dir / "stocks_returns.csv")
     macro_returns.to_csv(output_dir / "macro_returns.csv")
@@ -153,9 +136,7 @@ def main() -> dict:
     residuals_test.to_csv(output_dir / "residuals.csv")
     zscores_test.to_csv(output_dir / "zscores.csv")
     net_test.to_frame("net_return").to_csv(output_dir / "net_returns.csv")
-
     print(f"All outputs saved → {output_dir.resolve()}/")
-
     _section("Pipeline Complete")
 
     return {
