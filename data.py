@@ -11,9 +11,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-stocks = ['DAL', 'UAL', 'AAL', 'LUV', 'ALK', 'JBLU',
-          'UNP', 'CSX', 'NSC', 'CP', 'CNI',
-          'UPS', 'FDX', 'JBHT', 'ODFL', 'KNX', 'SAIA', 'SNDR', 'CHRW', 'EXPD']
+stocks = ['DAL', 'UAL', 'AAL', 'LUV', 'ALK', 'JBLU', 'UNP', 'CSX', 'NSC', 'CP', 'CNI', 'UPS', 'FDX', 'JBHT', 'ODFL', 'KNX', 'SAIA', 'SNDR', 'CHRW', 'EXPD']
 
 benchmark = ['SPY', 'IYT']
 macro = ['BZ=F', '^VIX']
@@ -32,7 +30,7 @@ def download_prices(
         tickers = stocks + benchmark + macro
 
     print(f"Downloading {len(tickers)} tickers [{start} -> {end}] ...")
-    raw = yf.download(tickers, start=start, end=end, auto_adjust=True, progress=False)
+    raw = yf.download(tickers, start = start, end = end, auto_adjust = True, progress = False)
     prices = raw['Close'].copy()
     prices = prices.rename(columns={'BZ=F': 'Brent', '^VIX': 'VIX'})
     return prices
@@ -60,23 +58,19 @@ def load_data() -> tuple:
         prices: all adjusted close prices
     """
     prices = download_prices()
-
-    # Log returns for stocks + factors
     return_cols = stocks + ['SPY', 'IYT']
     returns = compute_log_returns(prices[return_cols])
     returns = clean_data(returns)
-
+    
     stocks_returns = returns[stocks].copy()
-
-    # Build macro_returns
+    
     macro_returns = pd.DataFrame(index = stocks_returns.index)
     macro_returns['SPY'] = returns['SPY']
     macro_returns['IYT'] = returns['IYT']
     macro_returns['Brent'] = prices['Brent'].reindex(stocks_returns.index)
     macro_returns['VIX'] = prices['VIX'].reindex(stocks_returns.index)
-
-    macro_returns[['Brent', 'VIX']] = macro_returns[['Brent', 'VIX']].ffill(limit=2)
-
+    macro_returns[['Brent', 'VIX']] = macro_returns[['Brent', 'VIX']].ffill(limit = 2)
+    
     print(f"Stocks: {stocks_returns.shape[1]} tickers")
     print(f"Macro columns: {list(macro_returns.columns)}")
     print(f"Dates: {len(stocks_returns)} trading days")

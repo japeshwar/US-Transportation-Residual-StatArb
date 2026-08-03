@@ -35,7 +35,6 @@ def compute_simple_residuals(
     for ticker in stock_returns.columns:
         y = stock_returns[ticker].dropna()
         common_idx = y.index.intersection(factors.index)
-        
         y = y.loc[common_idx]
         X = factors.loc[common_idx]
         

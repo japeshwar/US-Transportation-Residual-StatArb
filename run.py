@@ -74,7 +74,7 @@ def main() -> dict:
         top_n = bt.top_n,
         exit_ = bt.exit_threshold,
         min_hold = bt.min_hold_days,
-        momentum = True
+        momentum = False
     )
 
     positions_train = bt.construct_portfolio(signals_train, zscores = zscores_train, residuals = residuals_train)
@@ -98,7 +98,7 @@ def main() -> dict:
         top_n = bt.top_n,
         exit_ = bt.exit_threshold,
         min_hold = bt.min_hold_days,
-        momentum = True
+        momentum = False
     )
 
     positions_test = bt.construct_portfolio(signals_test, zscores = zscores_test, residuals = residuals_test)

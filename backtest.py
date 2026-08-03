@@ -14,10 +14,10 @@ import scipy.stats as stats
 
 
 # Strategic Parameters
-entry_threshold = 2.0
-exit_threshold = 0.60
-min_hold_days = 10
-top_n = 3
+entry_threshold = 4.30
+exit_threshold = 0.5
+min_hold_days = 5
+top_n = 5
 max_daily_turnover = 0.06
 transaction_cost = 0.0010
 trading_days = 252
