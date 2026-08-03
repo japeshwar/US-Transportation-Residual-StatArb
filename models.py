@@ -17,6 +17,44 @@ n_components = 3 # Default # of PCs
 
 window_candidates = [45, 60, 90, 120, 180, 240]
 
+def compute_simple_residuals(
+    stock_returns: pd.DataFrame,
+    factor_returns: pd.DataFrame,
+    window: int = 90
+) -> pd.DataFrame:
+    """
+    Rolling residual of each stock against SPY + IYT.
+    
+    residual_t = r_stock_t - β1 * r_SPY_t - β2 * r_IYT_t
+    where betas are estimated on the previous `window` days.
+    """
+    residuals = pd.DataFrame(index = stock_returns.index, columns = stock_returns.columns, dtype = float)
+    
+    factors = factor_returns[['SPY', 'IYT']].dropna()
+    
+    for ticker in stock_returns.columns:
+        y = stock_returns[ticker].dropna()
+        common_idx = y.index.intersection(factors.index)
+        
+        y = y.loc[common_idx]
+        X = factors.loc[common_idx]
+        
+        for i in range(window, len(common_idx)):
+            y_win = y.iloc[i-window:i]
+            X_win = X.iloc[i-window:i]
+            
+            # Design matrix with intercept
+            X_design = np.column_stack([np.ones(len(X_win)), X_win.values])
+            
+            try:
+                beta = np.linalg.lstsq(X_design, y_win.values, rcond = None)[0]
+                predicted = beta[0] + beta[1] * X.iloc[i]['SPY'] + beta[2] * X.iloc[i]['IYT']
+                residuals.loc[common_idx[i], ticker] = y.iloc[i] - predicted
+            except Exception:
+                residuals.loc[common_idx[i], ticker] = np.nan
+                
+    return residuals
+
 def rolling_covariances(
     returns: pd.DataFrame,
     window: int = lookback,

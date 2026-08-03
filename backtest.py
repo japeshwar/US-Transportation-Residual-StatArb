@@ -14,15 +14,13 @@ import scipy.stats as stats
 
 
 # Strategic Parameters
-entry_threshold = 2.25 # Z-score to enter
-exit_threshold = 0.50 # |z| below which we exit
-min_hold_days = 12 # minimum days before exit allowed
-conc_full = 0.40 # below this: full exposure (normal regime)
-conc_zero = 0.75 # above this: zero exposure (crisis regime)
-transaction_cost = 0.0010 # 10 bps one-way
-trading_days = 252
-top_n = 2 # max positions per side (long or short)
+entry_threshold = 2.0
+exit_threshold = 0.60
+min_hold_days = 10
+top_n = 3
 max_daily_turnover = 0.06
+transaction_cost = 0.0010
+trading_days = 252
 
 
 # Signal Generation
@@ -31,164 +29,64 @@ def generate_signals(
     zscores: pd.DataFrame,
     entry: float = entry_threshold,
     exit_: float = exit_threshold,
-    top_n: int = 2,
-    min_hold: int = 12,
+    top_n: int = top_n,
+    min_hold: int = min_hold_days,
     momentum: bool = False,
 ) -> pd.DataFrame:
     """
-    Purpose
-    _______
-    Generate directional signals with optional momentum mode.
-
-    momentum = False (default, mean reversion):
-        z < -entry → LONG (stock underperformed, expect bounce)
-        z > +entry → SHORT (stock outperformed, expect pullback)
-
-    momentum = True (trend following):
-        z > +entry → LONG (positive residual momentum, ride it)
-        z < -entry → SHORT (negative residual momentum, ride it)
-
-    Exit condition is the same in both modes:
-        abs(z) < exit → signal has dissipated, exit
-
-    Minimum holding period enforced in both modes.
+    Clean mean-reversion / momentum signal generator.
+    No slope filter – pure z-score based.
     """
-    z_slope = zscores.diff().fillna(0.0)
     cols = zscores.columns.tolist()
-    signals = pd.DataFrame(0.0, index = zscores.index, columns = cols)
-    prev = pd.Series(0.0, index = cols)
-    hold_cnt = pd.Series(0, index = cols, dtype=int)
- 
+    signals = pd.DataFrame(0.0, index=zscores.index, columns=cols)
+    
+    prev = pd.Series(0.0, index=cols)
+    hold_cnt = pd.Series(0, index=cols, dtype=int)
+    
     for i, date in enumerate(zscores.index):
-        z = zscores.loc[date].fillna(0.0)  # NaN → 0 (untradeable = flat)
+        z = zscores.loc[date].fillna(0.0)
         new = prev.copy()
- 
-        # Increment holding counter for open positions
+        
+        # Update holding counters
         for t in cols:
             if prev[t] != 0:
                 hold_cnt[t] += 1
- 
-        # Exit: only if minimum hold period met AND signal reverted
+        
+        # Exit logic
         for t in cols:
             if prev[t] != 0 and hold_cnt[t] >= min_hold:
                 if abs(z[t]) < exit_:
                     new[t] = 0.0
                     hold_cnt[t] = 0
- 
-        current_longs = [t for t in cols if new[t] == 1.0]
-        current_shorts = [t for t in cols if new[t] == -1.0]
- 
-        if len(current_longs) >= top_n:
-            weakest_long = min(current_longs, key = lambda t: abs(z[t]))
-            candidates = [t for t in cols
-                          if t not in current_longs
-                          and (z[t] > entry if momentum else z[t] < -entry)]
-            if candidates:
-                strongest_new = max(candidates, key = lambda t: abs(z[t]))
-                if abs(z[strongest_new]) > abs(z[weakest_long]):
-                    new[weakest_long] = 0.0
-                    hold_cnt[weakest_long] = 0
- 
-        if len(current_shorts) >= top_n:
-            weakest_short = min(current_shorts, key = lambda t: abs(z[t]))
-            candidates = [t for t in cols
-                          if t not in current_shorts
-                          and (z[t] < -entry if momentum else z[t] > entry)]
-            if candidates:
-                strongest_new = max(candidates, key=lambda t: abs(z[t]))
-                if abs(z[strongest_new]) > abs(z[weakest_short]):
-                    new[weakest_short] = 0.0
-                    hold_cnt[weakest_short] = 0
- 
-        n_long_slots = top_n - sum(1 for t in cols if new[t] == 1.0)
-        n_short_slots = top_n - sum(1 for t in cols if new[t] == -1.0)
- 
-        slope_row = z_slope.iloc[i] if i < len(z_slope) else pd.Series(0.0, index = cols)
-
-        if i >= 3:
-            slope_3d = zscores.iloc[i] - zscores.iloc[i-3]
-        else:
-            slope_3d = pd.Series(0.0, index = cols)
+        
+        # Entry logic
         if momentum:
-            long_cands = {
-                t: z[t] for t in cols
-                if z[t] > entry and slope_row[t] >= 0 and new[t] == 0.0
-            }
-            short_cands = {
-                t: z[t] for t in cols
-                if z[t] < -entry and slope_row[t] <= 0 and new[t] == 0.0
-            }
+            long_cands  = {t: z[t] for t in cols if z[t] > entry and new[t] == 0.0}
+            short_cands = {t: z[t] for t in cols if z[t] < -entry and new[t] == 0.0}
         else:
-            # Mean-reversion with flattening requirement
-            long_cands = {
-                t: z[t] for t in cols
-                if (z[t] < -entry
-                    and slope_row[t] <= 0
-                    and slope_3d[t] > slope_row[t]
-                    and new[t] == 0.0)
-            }
-            short_cands = {
-                t: z[t] for t in cols
-                if (z[t] > entry
-                    and slope_row[t] >= 0
-                    and slope_3d[t] < slope_row[t]
-                    and new[t] == 0.0)
-            }
-
-        n_long_open = sum(1 for t in cols if new[t] == 1.0)
+            long_cands  = {t: z[t] for t in cols if z[t] < -entry and new[t] == 0.0}
+            short_cands = {t: z[t] for t in cols if z[t] > entry and new[t] == 0.0}
+        
+        # Fill available slots
+        n_long_open  = sum(1 for t in cols if new[t] == 1.0)
         n_short_open = sum(1 for t in cols if new[t] == -1.0)
-
+        
         if long_cands and n_long_open < top_n:
-            ranked = sorted(long_cands.items(),
-                           key = lambda x: x[1], reverse = momentum)
+            ranked = sorted(long_cands.items(), key=lambda x: x[1])  # most negative first
             for t, _ in ranked[:top_n - n_long_open]:
-                new[t] = 1.0; hold_cnt[t] = 0
-
+                new[t] = 1.0
+                hold_cnt[t] = 0
+                
         if short_cands and n_short_open < top_n:
-            ranked = sorted(short_cands.items(),
-                           key = lambda x: x[1], reverse = not momentum)
+            ranked = sorted(short_cands.items(), key=lambda x: x[1], reverse=True)  # most positive first
             for t, _ in ranked[:top_n - n_short_open]:
-                new[t] = -1.0; hold_cnt[t] = 0
-
+                new[t] = -1.0
+                hold_cnt[t] = 0
+        
         signals.iloc[i] = new
         prev = new.copy()
-
+    
     return signals
- 
-# Portfolio Construction
- 
-def apply_continuous_concentration_scaling(
-    positions: pd.DataFrame,
-    concentration: pd.Series,
-    conc_full: float = conc_full,
-    conc_zero: float = conc_zero,
-) -> pd.DataFrame:
-    """
-    Purpose
-    _______
-    Linearly scale all position sizes with PC1 concentration.
- 
-    Mathematical Explanation
-    _______
-    Scaling factor at date t:
- 
-        scale_t = max(0, min(1, (conc_zero − c_t) / (conc_zero − conc_full)))
- 
-    Assumptions
-    _______
-    - Dates without concentration data are treated as scale=1.0 (no penalty)
-    - Scaling is applied to final portfolio weights, not signals
-    """
-    rng = conc_zero - conc_full
-    scaled = positions.copy()
- 
-    for date in positions.index:
-        if date not in concentration.index:
-            continue
-        c = concentration.loc[date]
-        scale = max(0.0, min(1.0, (conc_zero - c) / rng if rng > 0 else 1.0))
-        scaled.loc[date] = scaled.loc[date] * scale
-    return scaled
  
 def construct_portfolio(
     signals: pd.DataFrame,
