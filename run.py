@@ -3,10 +3,8 @@ run.py
 ===========
 Dynamic Transportation Factor Laboratory
 """
-
 import warnings
 warnings.filterwarnings("ignore")
-
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -72,6 +70,7 @@ def main() -> dict:
 
     positions_train = bt.construct_portfolio(signals_train, zscores = zscores_train, residuals = residuals_train)
     positions_train = bt.apply_macro_regime_filter(positions_train, train_macro)
+    positions_train = bt.apply_constant_leverage(positions_train, leverage = 4.0)
 
     net_train, trades_train = bt.compute_portfolio_returns(positions_train, train_stocks)
     perf_train = bt.compute_performance(net_train, trades_train, train_macro)
@@ -94,6 +93,7 @@ def main() -> dict:
 
     positions_test = bt.construct_portfolio(signals_test, zscores = zscores_test, residuals = residuals_test)
     positions_test = bt.apply_macro_regime_filter(positions_test, test_macro)
+    positions_test = bt.apply_constant_leverage(positions_test, leverage = 4.0)
 
     net_test, trades_test = bt.compute_portfolio_returns(positions_test, test_stocks)
     perf_test = bt.compute_performance(net_test, trades_test, test_macro)

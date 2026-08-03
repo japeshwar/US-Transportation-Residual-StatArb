@@ -4,24 +4,19 @@ backtest.py
 ================
 Dynamic Transportation Factor Laboratory
 """
-
 import numpy as np
 import pandas as pd
 from typing import Tuple
 import sys, os
-from statsmodels.tsa.stattools import adfuller
-import scipy.stats as stats
-
 
 # Strategic Parameters
-entry_threshold = 4.30
+entry_threshold = 4.3
 exit_threshold = 0.5
 min_hold_days = 5
 top_n = 5
-max_daily_turnover = 0.06
+max_daily_turnover = 0.20
 transaction_cost = 0.0010
 trading_days = 252
-
 
 # Signal Generation
  
@@ -145,7 +140,10 @@ def construct_portfolio(
             positions.loc[date, t] = w
  
     return positions
- 
+
+def apply_constant_leverage(positions: pd.DataFrame, leverage: float = 4.0) -> pd.DataFrame:
+    return positions * leverage
+
 def apply_volatility_targeting(
     positions: pd.DataFrame,
     returns: pd.DataFrame,
