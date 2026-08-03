@@ -12,25 +12,25 @@ Dollar-neutral residual mean-reversion strategy on a universe of 20 liquid U.S. 
 - **Risk Controls**: Position limits (`top_n = 5`), minimum holding period, turnover budget, and macro regime filter  
 - **Portfolio**: Dollar-neutral, inverse-volatility weighted within each side
 
-## Performance (Out-of-Sample)
+## Performance (Validation Period)
 
 | Metric                    | Validation (2022–2026) |
 |---------------------------|------------------------|
-| Annualized Return         | 3.53%                  |
-| Annualized Volatility     | 3.08%                  |
+| Annualized Return         | 14.07%                 |
+| Annualized Volatility     | 12.38%                 |
 | **Sharpe Ratio**          | **1.14**               |
-| Maximum Drawdown          | –2.62%                 |
-| Calmar Ratio              | 1.35                   |
-| Annual Turnover           | ~2.8×                  |
-| SPY Alpha (t-stat)        | 2.23                   |
+| Maximum Drawdown          | –10.53%                |
+| Calmar Ratio              | 1.34                   |
+| Annual Turnover           | ~11.09×                |
+| SPY Alpha (t-stat)        | 2.21                   |
 
 Training period: 2015–2019  
 Validation period: 2022–2026  
 
 ## Project Structure
-├── data.py          # Data download & residual preparation
-├── models.py        # Simple residual & z-score functions
-├── backtest.py      # Signal generation, portfolio construction, performance
-├── run.py           # Full train/validation pipeline
-├── Notebooks/       # Research & diagnostic notebooks
-└── Outputs/         # Saved results and charts
+data.py - Data download & residual preparation
+models.py - Simple residual & z-score functions
+backtest.py - Signal generation, portfolio construction, performance
+run.py - Full train/validation pipeline
+Notebooks - Research & diagnostic notebooks
+Outputs - Saved results and charts
