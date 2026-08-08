@@ -215,12 +215,12 @@ def compute_portfolio_returns(
     pos_executed = pos.shift(1).fillna(0.0)
     pos_prev = pos_executed.shift(1).fillna(0.0)
     pos_change = pos_executed - pos_prev
-    raw_to = pos_change.abs().sum(axis = 1) / 2
+    raw_to = pos_change.abs().sum(axis = 1)
     scale = (turnover_budget / raw_to).clip(upper = 1.0).replace([np.inf], 1.0)
     pos_executed = pos_prev + pos_change.multiply(scale, axis = 0)
     gross_ret = (pos_executed * ret).sum(axis = 1)
-    turnover = pos_executed.diff().abs().sum(axis = 1) / 2
-    turnover.iloc[0] = pos_executed.iloc[0].abs().sum() / 2
+    turnover = pos_executed.diff().abs().sum(axis = 1)
+    turnover.iloc[0] = pos_executed.iloc[0].abs().sum()
     cost_drag = turnover * cost
     net_ret = gross_ret - cost_drag
  

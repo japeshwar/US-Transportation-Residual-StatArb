@@ -98,7 +98,29 @@ def main() -> dict:
     net_test, trades_test = bt.compute_portfolio_returns(positions_test, test_stocks)
     perf_test = bt.compute_performance(net_test, trades_test, test_macro)
     _print_perf(perf_test, "Validation (Out-of-Sample)")
+    # ── Unlevered vs 4x Levered Comparison ──────────────────────────────────────
+    print("\n" + "="*65)
+    print("PERFORMANCE SUMMARY — Unlevered vs 4x Levered")
+    print("="*65)
 
+    def _show_perf(net, label):
+        r = net.dropna()
+        ann_ret = r.mean() * 252
+        ann_vol = r.std() * np.sqrt(252)
+        sharpe = ann_ret / ann_vol if ann_vol > 0 else np.nan
+        cum = (1 + r).cumprod()
+        mdd = ((cum - cum.cummax()) / cum.cummax()).min()
+        print(f"\n{label}")
+        print(f"Ann. Return: {ann_ret:.2%}")
+        print(f"Ann. Volatility: {ann_vol:.2%}")
+        print(f"Sharpe Ratio: {sharpe:.3f}")
+        print(f"Max Drawdown: {mdd:.2%}")
+        
+    _show_perf(net_test, "UNLEVERED (Research Result — Pure Alpha)")
+
+    levered_net = net_test * 4.0
+    _show_perf(levered_net, "4x LEVERED (Implementation Scenario)")
+    
     # 5. Plots
     _section("5 Plots")
 

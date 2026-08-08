@@ -38,15 +38,41 @@ def compute_log_returns(prices: pd.DataFrame) -> pd.DataFrame:
     return log_returns.dropna(how = 'all')
 
 def clean_data(returns: pd.DataFrame) -> pd.DataFrame:
-    returns = returns.ffill(limit = 2)
-    stocks_cols = [c for c in returns.columns if c in stocks]
-    returns = returns.dropna(subset=stocks_cols)
+    df = returns.copy()
+    min_periods = 60
+    n_std = 4
+    
+    clipped = pd.DataFrame(index = df.index, columns = df.columns, dtype = float)
+    
+    for col in df.columns:
+        series = df[col].copy()
+        
+        expanding_mean = series.expanding(min_periods = min_periods).mean()
+        expanding_std = series.expanding(min_periods = min_periods).std()
+        
+        lower = expanding_mean - n_std * expanding_std
+        upper = expanding_mean + n_std * expanding_std
+        
+        clipped_series = series.copy()
+        
+        has_stats = expanding_mean.notna() & expanding_std.notna()
+        
+        clipped_series[has_stats] = series[has_stats].clip(
+            lower = lower[has_stats],
+            upper = upper[has_stats]
+        )
+        
+        clipped[col] = clipped_series
 
-    for col in returns.columns:
-        mu = returns[col].mean()
-        sigma = returns[col].std()
-        returns[col] = returns[col].clip(lower = mu - 4 * sigma, upper = mu + 4 * sigma)
-    return returns
+    n_before = len(clipped)
+    clipped = clipped.dropna()
+    n_after = len(clipped)
+    
+    if n_before - n_after > 0:
+        print(f"Dropped {n_before - n_after} rows with missing data")
+    
+    print(f"Clean returns: {n_after} observations, {len(clipped.columns)} assets")
+    return clipped
 
 def load_data() -> tuple:
     """
