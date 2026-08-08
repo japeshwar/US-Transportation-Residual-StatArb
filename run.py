@@ -93,7 +93,6 @@ def main() -> dict:
 
     positions_test = bt.construct_portfolio(signals_test, zscores = zscores_test, residuals = residuals_test)
     positions_test = bt.apply_macro_regime_filter(positions_test, test_macro)
-    positions_test = bt.apply_constant_leverage(positions_test, leverage = 4.0)
 
     net_test, trades_test = bt.compute_portfolio_returns(positions_test, test_stocks)
     perf_test = bt.compute_performance(net_test, trades_test, test_macro)
